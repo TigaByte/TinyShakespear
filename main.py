@@ -21,7 +21,7 @@ with open('input.txt', 'r', encoding='utf-8') as f:
 # Unique characters
 chars = sorted(list(set(text)))
 vocab_size = len(chars)
-print("".join(chars))
+#print("".join(chars))
 print("Vocabulary size:", vocab_size)
 
 # Tokenizer
@@ -32,21 +32,18 @@ decode = lambda l: "".join([itos[i] for i in l])
 
 # Encode data
 data = torch.tensor(encode(text), dtype=torch.long)
-print(data.shape, data.dtype)
-print(data[:1000])
-
 # Train/Val split
 n = int(0.9 * len(data))
 train_data = data[:n]
 val_data = data[n:]
 
 # Debugging sample
-x = train_data[:block_size]
-y = train_data[1:block_size+1]
-for t in range(block_size):
-    context = x[:t+1]
-    target = y[t]
-    print(f"When input is {context} the target is {target}")
+#x = train_data[:block_size]
+#y = train_data[1:block_size+1]
+#for t in range(block_size):
+#    context = x[:t+1]
+#    target = y[t]
+#    print(f"When input is {context} the target is {target}")
 
 # Batch generation
 def get_batch(split):
@@ -56,21 +53,19 @@ def get_batch(split):
     y = torch.stack([data[i+1:i+block_size+1] for i in ix])
     return x.to(device), y.to(device)
 
-# Batch inspection
-xb, yb = get_batch('train')
-print("Inputs:")
-print(xb.shape)
-print(xb)
-print("Targets:")
-print(yb.shape)
-print(yb)
-print("---")
-
-for b in range(batch_size):
-    for t in range(block_size):
-        context = xb[b, :t+1]
-        target = yb[b, t]
-        print(f"When input is {context} the target is {target}")
+@torch.no_grad()
+def estimate_loss():
+    out = {}
+    model.eval()
+    for split in ['train', 'val']:
+        losses = torch.zeros(eval_iters)
+        for k in range(eval_iters):
+            X, Y = get_batch(split)
+            logits, loss = model(X, Y)
+            losses[k] = loss.item()
+        out[split] = losses.mean()
+    model.train()
+    return out
 
 # Model definition
 class BigramLanguageModel(nn.Module):
@@ -100,32 +95,53 @@ class BigramLanguageModel(nn.Module):
             idx = torch.cat([idx, idx_next], dim=1)
         return idx
 
+
+xb, yb = get_batch('train')
+#print("Inputs:")
+#print(xb.shape)
+#print(xb)
+#print("Targets:")
+#print(yb.shape)
+#print(yb)
+#print("---")
+
+
+# Batch inspection
+#for b in range(batch_size):
+#    for t in range(block_size):
+#        context = xb[b, :t+1]
+#        target = yb[b, t]
+#        print(f"When input is {context} the target is {target}")
+
+
+
 # Initialize model
 model = BigramLanguageModel(vocab_size).to(device)
 logits, loss = model(xb, yb)
-print(logits.shape)
-print(loss)
+#print(logits.shape)
+#print(loss)
 
 # Sample generation
 start = torch.zeros((1, 1), dtype=torch.long).to(device)
-print("Sample Generation [befor training]")
+print("Sample Generation [befor training] : ")
 print(decode(model.generate(start, 100)[0].tolist()))
 
 # Optimizer
 optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
 
 # Training loop
-for step in range(max_iters):
+for iter in range(max_iters):
     xb, yb = get_batch('train')
     logits, loss = model(xb, yb)
     optimizer.zero_grad(set_to_none=True)
     loss.backward()
     optimizer.step()
 
-    if step % eval_interval == 0:
-        print(f"Step {step}, Loss: {loss.item():.4f}")
+    if iter % eval_interval == 0:
+        loss = estimate_loss()
+        print(f"Step {iter}, Loss: train --> {loss['train']} | val --> {loss['val']}")
 
 # Final generation
-print("Sample Generation [after training]")
+print("Sample Generation [after training] : ")
 context = torch.zeros((1, 1), dtype=torch.long).to(device)
 print(decode(model.generate(context, 100)[0].tolist()))
