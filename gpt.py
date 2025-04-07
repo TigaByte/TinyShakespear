@@ -1,16 +1,19 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
-from torch.nn.functional import softmax
+from torch.nn.functional import softmax, dropout
 
 # Parameters
-block_size = 8
-batch_size = 4
-max_iters = 10000
-eval_interval = 1000
-learning_rate = 1e-4
-eval_iters = 100
-n_embed = 32
+block_size = 256
+batch_size = 64
+max_iters = 5000
+eval_interval = 500
+learning_rate = 3e-4
+eval_iters = 200
+n_embed = 384
+n_layers = 6
+n_head = 6
+dropout = 0.2
 
 device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 torch.manual_seed(42)
@@ -69,8 +72,9 @@ class Head(nn.Module):
         self.key = nn.Linear(n_embed, head_size, bias=False)
         self.query = nn.Linear(n_embed, head_size, bias=False)
         self.value = nn.Linear(n_embed, head_size, bias=False)
-
         self.register_buffer('trill', torch.tril(torch.ones(block_size, block_size)))
+
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
         B, T, C = x.shape
@@ -80,6 +84,7 @@ class Head(nn.Module):
         wei = q @ k.transpose(-2, -1) * C**-0.5
         wei = wei.masked_fill(self.trill[:T, :T] == 0 , float('-inf'))
         wei = F.softmax(wei, dim=-1)
+        wei = self.dropout(wei)
         v = self.value(x)
         out = wei @ v
         return out
@@ -90,10 +95,11 @@ class MultiHeadAttention(nn.Module):
         super().__init__()
         self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
         self.proj = nn.Linear(n_embed, n_embed)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
         out = torch.cat([h(x) for h in self.heads], dim=-1)
-        out = self.proj(out)
+        out = self.dropout(self.proj(out))
         return out
 
 class FeedForward(nn.Module):
@@ -104,6 +110,7 @@ class FeedForward(nn.Module):
             nn.Linear(n_embed, 4 * n_embed),
             nn.GELU(),
             nn.Linear(4 * n_embed, n_embed),
+            nn.Dropout(dropout),
         )
 
     def forward(self, x):
@@ -115,12 +122,13 @@ class Transformer(nn.Module):
         head_size = n_embed // n_heads
         self.sa = MultiHeadAttention(n_heads, head_size)
         self.ffwd = FeedForward(n_embed)
+        self.Ln1 = nn.LayerNorm(n_embed)
+        self.Ln2 = nn.LayerNorm(n_embed)
 
     def forward(self, x):
-        x = x + self.sa(x)
-        x = x + self.ffwd(x)
+        x = x + self.sa(self.Ln1(x))
+        x = x + self.ffwd(self.Ln2(x))
         return x
-
 
 # Model definition
 class BigramLanguageModel(nn.Module):
@@ -131,11 +139,11 @@ class BigramLanguageModel(nn.Module):
         self.sa_heads = MultiHeadAttention(4, n_embed//4)
         self.ffw = FeedForward(n_embed)
         self.lm_head = nn.Linear(n_embed, vocab_size)
-        self.blocks = nn.ModuleList([
-            Transformer(n_heads=4, n_embed=n_embed),
-            Transformer(n_heads=4, n_embed=n_embed),
-            Transformer(n_heads=4, n_embed=n_embed),
-        ])
+        self.blocks = nn.Sequential(
+            *[Transformer(n_head, n_embed) for _ in range(n_layers)],
+            nn.LayerNorm(n_embed),
+        )
+        self.lm_head = nn.Linear(n_embed, vocab_size)
 
     def forward(self, idx, targets=None):
         B, T = idx.shape
@@ -144,8 +152,7 @@ class BigramLanguageModel(nn.Module):
         x = tok_emd + pos_embed
         x = self.sa_heads(x)
         x = self.ffw(x)
-        for block in self.blocks:
-            x = block(x)
+        x = self.blocks(x)
         logits = self.lm_head(x) # (B, T, vocab_size[C])
 
 
@@ -210,4 +217,4 @@ print("\n" + "=" * 40)
 print("📌 Sample Generation [After Training]")
 print("=" * 40)
 context = torch.zeros((1, 1), dtype=torch.long).to(device)
-print(decode(model.generate(context, 250)[0].tolist()))
+print(decode(model.generate(context, 500)[0].tolist()))
