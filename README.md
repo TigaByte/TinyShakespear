@@ -1,3 +1,3 @@
-worktrough [GPT tutorial](https://www.youtube.com/watch?v=kCc8FmEb1nY) by @karpathy
-Demo out put in demo_output.txt
-(optimised for 'mps' --> Apple sillicon chips )
+This is a learning repository for stuff around deep learning AI LLMS transformers so on 
+
+Lesson 01 --> Tiny shakespear GPT / LM
